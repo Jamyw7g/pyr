@@ -1,0 +1,25 @@
+[package]
+name = "pyr"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[lib]
+name = "pyr"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.17.1", features = ["extension-module"] }
+reqwest = "0.11.12"
+pyo3-asyncio = { version = "0.17", features = ["tokio-runtime"] }
+thiserror = "1.0.37"
+anyhow = "1.0.66"
+tokio = { version = "1.21.2", features = ["fs", "io-util"] }
+futures = "0.3.25"
+md5 = "0.7.0"
+pyo3-log = "0.7.0"
+log = "0.4.17"
+
+[profile.release]
+opt-level = "z"
+strip = "debuginfo"
