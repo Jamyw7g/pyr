@@ -276,13 +276,11 @@ fn build_client(dict: Option<&PyDict>) -> Result<RClient, Error> {
     let mut cb = ClientBuilder::new();
     if let Some(dict) = dict {
         if let Some(val) = dict.get_item("proxy") {
-            let proxy: &str = val.extract()?;
-            if proxy.to_ascii_lowercase().eq("noproxy") {
-                cb = cb.no_proxy();
-            } else {
-                let proxy = Proxy::all(proxy)?;
-                cb = cb.proxy(proxy);
-            };
+            match val.extract::<&str>().ok() {
+                Some(p) if p == "noproxy" => cb = cb.no_proxy(),
+                Some(p) => cb = cb.proxy(Proxy::all(p)?),
+                _ => (),
+            }
         }
     }
 
