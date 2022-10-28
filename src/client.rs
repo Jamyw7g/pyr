@@ -1,6 +1,8 @@
-use std::{str::FromStr, time::Duration, sync::Once};
+use std::{str::FromStr, sync::Once, time::Duration};
 
+use log::debug;
 use pyo3::{
+    exceptions::asyncio::CancelledError,
     prelude::*,
     types::{PyDict, PyTuple},
 };
@@ -9,7 +11,6 @@ use tokio::{
     fs::File,
     io::{AsyncWriteExt, BufWriter},
 };
-use log::debug;
 
 use crate::{
     common::*,
@@ -203,8 +204,13 @@ impl Client {
         }
         pyo3_asyncio::tokio::future_into_py(py, async move {
             debug!("Download a resource.");
-            download(client, req, name).await?;
-            Ok(())
+            tokio::select! {
+                res = download(client, req, name) => { _ = res?; Ok(()) }
+                _ = tokio::signal::ctrl_c() => {
+                    debug!("Terminate a download with ctrl-c");
+                    Err(CancelledError::new_err("Cancelled a future in Rust."))
+                }
+            }
         })
         .map(|fut| fut.to_object(py))
     }
@@ -253,7 +259,13 @@ impl Client {
                 })
                 .collect::<Vec<_>>();
             debug!("Parallel download {} resource.", futs.len());
-            futures::future::join_all(futs).await;
+            tokio::select! {
+                _ = futures::future::join_all(futs) => {}
+                _ = tokio::signal::ctrl_c() => {
+                    debug!("Terminate parallel download with ctrl-c");
+                    return Err(CancelledError::new_err("Cancelled some futures in Rust."));
+                }
+            };
             Ok(())
         })
         .map(|fut| fut.to_object(py))
@@ -289,8 +301,15 @@ fn build_headers(headers: Option<&PyDict>) -> Option<HeaderMap> {
 fn execute(py: Python, client: RClient, req: RRequest) -> PyResult<PyObject> {
     pyo3_asyncio::tokio::future_into_py(py, async move {
         debug!("Execute a request.");
-        let resp = inner_execute(client, req).await?;
-        Ok(resp)
+        tokio::select! {
+            resp = inner_execute(client, req) => {
+                Ok(resp?)
+            }
+            _ = tokio::signal::ctrl_c() => {
+                debug!("Terminate a execute with ctrl-c");
+                Err(CancelledError::new_err("Cancelled a futures in Rust."))
+            }
+        }
     })
     .map(|fut| fut.to_object(py))
 }
@@ -325,16 +344,20 @@ fn parallel_execute(
             futs.push(fut);
         }
         debug!("Parallel execute {} request.", futs.len());
-        let res: Vec<_> = futures::future::join_all(futs)
-            .await
+        let futs_res = tokio::select! {
+            futs_res = futures::future::join_all(futs) => { futs_res }
+            _ = tokio::signal::ctrl_c() => {
+                debug!("Terminate parallel execute with ctrl-c");
+                return Err(CancelledError::new_err("Cancelled some futures in Rust."));
+            }
+        };
+        let res: Vec<_> = futs_res
             .into_iter()
-            .filter_map(|res| {
-                match res {
-                    Ok(val) => Some(val),
-                    Err(e) => {
-                        debug!("Execute a request with error: {}", e);
-                        None
-                    }
+            .filter_map(|res| match res {
+                Ok(val) => Some(val),
+                Err(e) => {
+                    debug!("Execute a request with error: {}", e);
+                    None
                 }
             })
             .collect();
