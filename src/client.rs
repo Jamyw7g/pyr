@@ -6,7 +6,10 @@ use pyo3::{
     prelude::*,
     types::{PyDict, PyTuple},
 };
-use reqwest::{header::HeaderMap, ClientBuilder, Proxy};
+use reqwest::{
+    header::{HeaderMap, HeaderName, HeaderValue},
+    ClientBuilder, Proxy,
+};
 use tokio::{
     fs::File,
     io::{AsyncWriteExt, BufWriter},
@@ -26,6 +29,7 @@ pub struct Client {
 }
 
 static INIT_LOG: Once = Once::new();
+static APP_USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"),);
 
 #[pymethods]
 impl Client {
@@ -279,8 +283,15 @@ fn build_client(dict: Option<&PyDict>) -> Result<RClient, Error> {
             match val.extract::<&str>().ok() {
                 Some(p) if p == "noproxy" => cb = cb.no_proxy(),
                 Some(p) => cb = cb.proxy(Proxy::all(p)?),
-                _ => (),
+                _ => debug!("Nonsupport proxy."),
             }
+        }
+        match dict.get_item("user-agent").map(|v| v.extract::<&str>()) {
+            Some(Ok(ua)) => cb = cb.user_agent(ua),
+            _ => cb = cb.user_agent(APP_USER_AGENT),
+        }
+        if let Some(Ok(v)) = dict.get_item("verbose").map(|v| v.extract::<bool>()) {
+            cb = cb.connection_verbose(v);
         }
     }
 
@@ -289,9 +300,22 @@ fn build_client(dict: Option<&PyDict>) -> Result<RClient, Error> {
 }
 
 fn build_headers(headers: Option<&PyDict>) -> Option<HeaderMap> {
-    headers.map(|_dict| {
-        let header = HeaderMap::new();
-
+    headers.map(|dict| {
+        let mut header = HeaderMap::new();
+        for (key, val) in dict.iter() {
+            let key = key
+                .extract::<&str>()
+                .ok()
+                .map(|k| HeaderName::from_str(k).ok());
+            let val = val
+                .extract::<&str>()
+                .ok()
+                .map(|v| HeaderValue::from_str(v).ok());
+            match (&key, &val) {
+                (Some(Some(ref k)), Some(Some(ref v))) => _ = header.insert(k, v.clone()),
+                _ => debug!("Incorrect header: val: {:?}, val: {:?}", key, val),
+            }
+        }
         header
     })
 }
